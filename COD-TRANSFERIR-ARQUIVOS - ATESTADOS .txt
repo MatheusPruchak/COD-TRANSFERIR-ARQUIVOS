@@ -1,0 +1,211 @@
+CARREGAMENTO NAS PASTA 
+
+$origem = "C:\Users\Oem\Desktop\TESTE CARREGAR SERVIDOR AUTOMATICO"
+$destinoBase = "S:\RH\COFRE SERVSUL"
+
+# Validação da origem
+if (-not (Test-Path $origem)) {
+    Write-Host "❌ Pasta de origem não encontrada:" $origem
+    return
+}
+
+Get-ChildItem -Path $origem -File | ForEach-Object {
+
+    $arquivo = $_.Name
+    Write-Host "`n📄 Processando:" $arquivo
+
+    # ✔ aceita qualquer variação com hífen
+    if ($arquivo -match "^\d+\s*-\s*") {
+
+        $matricula = ($arquivo -split "-")[0].Trim()
+        Write-Host "🔎 Matrícula:" $matricula
+
+        # 🔍 Procura pasta do funcionário
+        $pastaMatricula = Get-ChildItem -Path $destinoBase -Directory |
+            Where-Object { $_.Name -like "$matricula*" } |
+            Select-Object -First 1
+
+        if ($pastaMatricula) {
+
+            Write-Host "📁 Pasta encontrada:" $pastaMatricula.FullName
+
+            $moveu = $false
+
+            # =========================
+            # 🔹 1️⃣ ATESTADO NA RAIZ
+            # =========================
+            $pastaDestino = Get-ChildItem -Path $pastaMatricula.FullName -Directory |
+                Where-Object { $_.Name.ToUpper() -like "*ATESTADO*" } |
+                Select-Object -First 1
+
+            if ($pastaDestino) {
+
+                Move-Item $_.FullName (Join-Path $pastaDestino.FullName $arquivo) -Force
+                Write-Host "✅ MOVIDO (PASTA PRINCIPAL)"
+                $moveu = $true
+            }
+
+            # =========================
+            # 🔹 2️⃣ SESMT
+            # =========================
+            if (-not $moveu) {
+
+                $pastaSESMT = Get-ChildItem -Path $pastaMatricula.FullName -Directory |
+                    Where-Object { $_.Name -match "SESMT" } |
+                    Select-Object -First 1
+
+                if ($pastaSESMT) {
+
+                    Write-Host "🏥 Verificando SESMT..."
+
+                    $pastaDestino = Get-ChildItem -Path $pastaSESMT.FullName -Directory -Recurse |
+                        Where-Object { $_.Name.ToUpper() -like "*ATESTADO*" } |
+                        Select-Object -First 1
+
+                    if ($pastaDestino) {
+
+                        Move-Item $_.FullName (Join-Path $pastaDestino.FullName $arquivo) -Force
+                        Write-Host "✅ MOVIDO (SESMT)"
+                        $moveu = $true
+                    }
+                }
+            }
+
+            # =========================
+            # 🔹 3️⃣ CRIAR ATESTADOS
+            # =========================
+            if (-not $moveu) {
+
+                Write-Host "⚠ Criando pasta ATESTADOS..."
+
+                $novaPasta = Join-Path $pastaMatricula.FullName "ATESTADOS"
+                New-Item -ItemType Directory -Path $novaPasta -Force | Out-Null
+
+                Move-Item $_.FullName (Join-Path $novaPasta $arquivo) -Force
+                Write-Host "✅ MOVIDO (CRIADO ATESTADOS)"
+            }
+        }
+        else {
+            Write-Host "❌ Pasta da matrícula não encontrada"
+        }
+    }
+    else {
+        Write-Host "⏭ Ignorado (não é atestado)"
+    }
+}
+
+
+
+
+
+------------------------------------------------------------------------------------------
+
+
+CARREGAR ASOS - 
+
+
+$origem = "C:\Users\Oem\Desktop\TESTE CARREGAR SERVIDOR AUTOMATICO"
+$destinoBase1 = "S:\RH\COFRE SERVSUL"
+$destinoBase2 = "S:\RH\NOVAS ADMISSÕES"
+
+if (-not (Test-Path $origem)) {
+    Write-Host "❌ Pasta de origem não encontrada:" $origem
+    return
+}
+
+Get-ChildItem -Path $origem -File | ForEach-Object {
+
+    $arquivo = $_.Name
+    $nomeArquivoSemExt = [System.IO.Path]::GetFileNameWithoutExtension($arquivo)
+
+    Write-Host "`n📄 Processando:" $arquivo
+
+    $matricula = $null
+    $nomeBusca = $null
+
+    if ($arquivo -match "^\d+\s*-\s*") {
+        $matricula = ($arquivo -split "-")[0].Trim()
+        Write-Host "🔎 Matrícula encontrada:" $matricula
+    }
+
+    $partes = $nomeArquivoSemExt -split "-"
+
+    if ($partes.Count -ge 2) {
+
+        if ($matricula) {
+            $nomeBusca = $partes[1].Trim()
+        }
+        else {
+            $nomeBusca = $partes[0].Trim()
+        }
+
+        Write-Host "🔎 Nome encontrado:" $nomeBusca
+    }
+
+    $pastaMatricula = $null
+
+    # =========================================
+    # 🔹 1ª BUSCA POR MATRÍCULA - NOVAS ADMISSÕES
+    # =========================================
+    if ($matricula) {
+
+        $pastaMatricula = Get-ChildItem -Path $destinoBase2 -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "$matricula*" } |
+            Select-Object -First 1
+
+        # =========================================
+        # 🔹 2ª BUSCA POR MATRÍCULA - COFRE SERVSUL
+        # =========================================
+        if (-not $pastaMatricula) {
+
+            Write-Host "⚠ Não encontrado em NOVAS ADMISSÕES, buscando no COFRE..."
+
+            $pastaMatricula = Get-ChildItem -Path $destinoBase1 -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "$matricula*" } |
+                Select-Object -First 1
+        }
+    }
+
+    # =========================================
+    # 🔹 BUSCA POR NOME
+    # =========================================
+    if (-not $pastaMatricula -and $nomeBusca) {
+
+        Write-Host "🔎 Buscando pelo nome..."
+
+        # PRIMEIRO NOVAS ADMISSÕES
+        $pastaMatricula = Get-ChildItem -Path $destinoBase2 -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name.ToUpper() -like "*$($nomeBusca.ToUpper())*" } |
+            Select-Object -First 1
+
+        # DEPOIS COFRE SERVSUL
+        if (-not $pastaMatricula) {
+
+            $pastaMatricula = Get-ChildItem -Path $destinoBase1 -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name.ToUpper() -like "*$($nomeBusca.ToUpper())*" } |
+                Select-Object -First 1
+        }
+    }
+
+    if ($pastaMatricula) {
+
+        Write-Host "📁 Pasta encontrada:" $pastaMatricula.FullName
+
+        $pastaSESMT = Get-ChildItem -Path $pastaMatricula.FullName -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match "SESMT" } |
+            Select-Object -First 1
+
+        if ($pastaSESMT) {
+
+            Move-Item $_.FullName (Join-Path $pastaSESMT.FullName $arquivo) -Force
+            Write-Host "✅ MOVIDO PARA SESMT"
+        }
+        else {
+            Write-Host "❌ Pasta SESMT não encontrada"
+        }
+    }
+    else {
+        Write-Host "❌ Matrícula/Nome não encontrado em nenhuma base"
+    }
+}
+

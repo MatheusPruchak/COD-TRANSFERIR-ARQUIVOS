@@ -1,0 +1,415 @@
+
+CARREGAR CARTÃO PONTO AUTOMATICO
+
+$origem = "C:\Users\Oem\Desktop\TESTE CARREGAR SERVIDOR AUTOMATICO"
+$destinoBase = "S:\RH\COFRE SERVSUL"
+
+$anoAtual = (Get-Date).Year
+
+Get-ChildItem -Path $origem -File | ForEach-Object {
+
+    $arquivo = $_.Name
+    Write-Host "`n📄 Processando:" $arquivo
+
+    # ===== MATRÍCULA NO FINAL =====
+    if ($arquivo -match "(\d+)(?=\D*$)") {
+
+        $matricula = $matches[1]
+        Write-Host "🔎 Matrícula:" $matricula
+
+        # ===== BUSCA PASTA FUNCIONÁRIO =====
+        $pastaMatricula = Get-ChildItem -Path $destinoBase -Directory |
+            Where-Object { $_.Name -match "^$matricula\b" } |
+            Select-Object -First 1
+
+        # ===== NOVA BUSCA EM NOVAS ADMISSÕES =====
+        if (-not $pastaMatricula) {
+
+            Write-Host "🔎 Procurando em NOVAS ADMISSÕES..."
+
+            $pastaMatricula = Get-ChildItem -Path "S:\RH\NOVAS ADMISSÕES" -Directory |
+                Where-Object { $_.Name -match "^$matricula\b" } |
+                Select-Object -First 1
+        }
+
+        if ($pastaMatricula) {
+
+            Write-Host "📁 Pasta encontrada:" $pastaMatricula.FullName
+
+            # ===== PROCURA PASTA BASE (MAIS FLEXÍVEL) =====
+            $pastaBase = Get-ChildItem -Path $pastaMatricula.FullName -Directory |
+                Where-Object {
+                    $_.Name -match "(?i)cart[aã]o[\s_-]?ponto" -or
+                    $_.Name -match "(?i)^ponto(s)?$" -or
+                    $_.Name -match "(?i)ponto eletr[oô]nico"
+                } |
+                Select-Object -First 1
+
+            if (-not $pastaBase) {
+
+                Write-Host "⚠ Criando pasta base CARTAO_PONTO..."
+                $pastaBase = New-Item -ItemType Directory -Path (Join-Path $pastaMatricula.FullName "CARTAO_PONTO") -Force
+            }
+
+            Write-Host "📂 Pasta base:" $pastaBase.FullName
+
+            # ===== ANO DINÂMICO =====
+            $pastaAno = Join-Path $pastaBase.FullName $anoAtual
+
+            if (-not (Test-Path $pastaAno)) {
+                Write-Host "⚠ Criando pasta $anoAtual..."
+                New-Item -ItemType Directory -Path $pastaAno -Force | Out-Null
+            }
+
+            # ===== EVITA SOBRESCREVER =====
+            $destinoFinal = Join-Path $pastaAno $arquivo
+
+            if (Test-Path $destinoFinal) {
+                $novoNome = "{0}_{1}{2}" -f $_.BaseName, (Get-Date -Format "HHmmss"), $_.Extension
+                $destinoFinal = Join-Path $pastaAno $novoNome
+                Write-Host "⚠ Arquivo já existe, renomeado para:" $novoNome
+            }
+
+            # ===== MOVE COM TRY/CATCH =====
+            try {
+                Move-Item $_.FullName $destinoFinal -ErrorAction Stop
+                Write-Host "✅ MOVIDO COM SUCESSO!"
+            }
+            catch {
+                Write-Host "❌ Erro ao mover:" $_
+            }
+        }
+        else {
+            Write-Host "❌ Pasta da matrícula não encontrada (nem no COFRE nem em NOVAS ADMISSÕES)"
+        }
+    }
+    else {
+        Write-Host "❌ Não conseguiu extrair matrícula"
+    }
+}
+
+
+
+
+
+-----------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+
+
+CARREGAR CARTÃO PONTO AUTOMATICO - COM PESQUISA PELO NOME - PRECISA DO pdftotext
+
+
+$origem = "C:\Users\Oem\Desktop\TESTE CARREGAR SERVIDOR AUTOMATICO"
+$destinoBase = "S:\RH\COFRE SERVSUL"
+$caminhoPdfToText = ".\pdftotext.exe"
+
+$anoAtual = (Get-Date).Year
+
+Get-ChildItem -Path $origem -File | ForEach-Object {
+
+    $arquivo = $_.Name
+    $caminhoArquivo = $_.FullName
+    Write-Host "`n📄 Processando:" $arquivo
+
+    $pastaMatricula = $null
+
+    # ===== 1️⃣ TENTA POR MATRÍCULA =====
+    if ($arquivo -match "(\d+)(?=\D*$)") {
+
+        $matricula = $matches[1]
+        Write-Host "🔎 Matrícula:" $matricula
+
+        $pastaMatricula = Get-ChildItem -Path $destinoBase -Directory |
+            Where-Object { $_.Name -match "^$matricula\b" } |
+            Select-Object -First 1
+
+        # ===== BUSCA EM NOVAS ADMISSÕES =====
+        if (-not $pastaMatricula) {
+
+            Write-Host "🔎 Procurando em NOVAS ADMISSÕES..."
+
+            $pastaMatricula = Get-ChildItem -Path "S:\RH\NOVAS ADMISSÕES" -Directory |
+                Where-Object { $_.Name -match "^$matricula\b" } |
+                Select-Object -First 1
+        }
+    }
+
+    # ===== 2️⃣ BUSCA POR NOME VIA PDF =====
+    if (-not $pastaMatricula) {
+
+        Write-Host "📄 Lendo PDF para buscar nome..."
+
+        $txtTemp = "$env:TEMP\temp_pdf.txt"
+
+        & $caminhoPdfToText $caminhoArquivo $txtTemp
+
+        if (Test-Path $txtTemp) {
+
+            $conteudo = Get-Content $txtTemp -Raw -ErrorAction SilentlyContinue
+
+            if (-not [string]::IsNullOrWhiteSpace($conteudo)) {
+
+                # ===== EXTRAÇÃO DE NOME MELHORADA =====
+                $linhas = $conteudo -split "`n"
+                $nome = $null
+
+                foreach ($linha in $linhas) {
+
+                    $linhaLimpa = $linha.Trim()
+
+                    if ($linhaLimpa -match "^[A-ZÁÉÍÓÚÃÕÇ ]{10,}$" -and
+                        $linhaLimpa -notmatch "CNPJ|CPF|PIS|DATA|HORAS|TOTAL|SERVSUL|RECURSOS") {
+
+                        $nome = $linhaLimpa
+                        break
+                    }
+                }
+
+                if ($nome) {
+
+                    Write-Host "🔎 Nome identificado:" $nome
+
+                    # ===== BUSCA POR NOME =====
+                    $pastaMatricula = Get-ChildItem -Path $destinoBase -Directory |
+                        Where-Object { $_.Name -match [regex]::Escape($nome) } |
+                        Select-Object -First 1
+
+                    if (-not $pastaMatricula) {
+
+                        Write-Host "🔎 Buscando nome em NOVAS ADMISSÕES..."
+
+                        $pastaMatricula = Get-ChildItem -Path "S:\RH\NOVAS ADMISSÕES" -Directory |
+                            Where-Object { $_.Name -match [regex]::Escape($nome) } |
+                            Select-Object -First 1
+                    }
+                }
+                else {
+                    Write-Host "❌ Nome não encontrado no PDF"
+                }
+            }
+            else {
+                Write-Host "❌ Conteúdo do PDF vazio ou não lido"
+            }
+
+            Remove-Item $txtTemp -ErrorAction SilentlyContinue
+        }
+        else {
+            Write-Host "❌ Arquivo TXT não foi gerado pelo pdftotext"
+        }
+    }
+
+    # ===== 3️⃣ PROCESSO ORIGINAL =====
+    if ($pastaMatricula) {
+
+        Write-Host "📁 Pasta encontrada:" $pastaMatricula.FullName
+
+        $pastaBase = Get-ChildItem -Path $pastaMatricula.FullName -Directory |
+            Where-Object {
+                $_.Name -match "(?i)cart[aã]o[\s_-]?ponto" -or
+                $_.Name -match "(?i)^ponto(s)?$" -or
+                $_.Name -match "(?i)ponto eletr[oô]nico"
+            } |
+            Select-Object -First 1
+
+        if (-not $pastaBase) {
+
+            Write-Host "⚠ Criando pasta base CARTAO_PONTO..."
+            $pastaBase = New-Item -ItemType Directory -Path (Join-Path $pastaMatricula.FullName "CARTAO_PONTO") -Force
+        }
+
+        Write-Host "📂 Pasta base:" $pastaBase.FullName
+
+        $pastaAno = Join-Path $pastaBase.FullName $anoAtual
+
+        if (-not (Test-Path $pastaAno)) {
+            Write-Host "⚠ Criando pasta $anoAtual..."
+            New-Item -ItemType Directory -Path $pastaAno -Force | Out-Null
+        }
+
+        $destinoFinal = Join-Path $pastaAno $arquivo
+
+        if (Test-Path $destinoFinal) {
+            $novoNome = "{0}_{1}{2}" -f $_.BaseName, (Get-Date -Format "HHmmss"), $_.Extension
+            $destinoFinal = Join-Path $pastaAno $novoNome
+            Write-Host "⚠ Arquivo já existe, renomeado para:" $novoNome
+        }
+
+        try {
+            Move-Item $caminhoArquivo $destinoFinal -ErrorAction Stop
+            Write-Host "✅ MOVIDO COM SUCESSO!"
+        }
+        catch {
+            Write-Host "❌ Erro ao mover:" $_
+        }
+    }
+    else {
+        Write-Host "❌ Não encontrou pasta nem por matrícula nem por nome"
+    }
+}
+
+
+
+
+-----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+
+CARREGAR PONTO NO SERVIDOR - QUALQUER ANO 
+
+$origem = "C:\Users\Oem\Desktop\TESTE CARREGAR SERVIDOR AUTOMATICO"
+$destinoBase = "S:\RH\COFRE SERVSUL"
+$caminhoPdfToText = ".\pdftotext.exe"
+
+Get-ChildItem -Path $origem -File | ForEach-Object {
+
+    $arquivo = $_.Name
+    $caminhoArquivo = $_.FullName
+    Write-Host "`n📄 Processando:" $arquivo
+
+    # ===== EXTRAIR ANO DO NOME DO ARQUIVO =====
+    $anoArquivo = $null
+
+    if ($arquivo -match "(20\d{2})") {
+        $anoArquivo = $matches[1]
+        Write-Host "📅 Ano identificado no arquivo:" $anoArquivo
+    }
+    else {
+        $anoArquivo = (Get-Date).Year
+        Write-Host "⚠ Ano não encontrado no nome, usando ano atual:" $anoArquivo
+    }
+
+    $pastaMatricula = $null
+
+    # ===== 1️⃣ TENTA POR MATRÍCULA =====
+    if ($arquivo -match "(\d+)(?=\D*$)") {
+
+        $matricula = $matches[1]
+        Write-Host "🔎 Matrícula:" $matricula
+
+        $pastaMatricula = Get-ChildItem -Path $destinoBase -Directory |
+            Where-Object { $_.Name -match "^$matricula\b" } |
+            Select-Object -First 1
+
+        # ===== BUSCA EM NOVAS ADMISSÕES =====
+        if (-not $pastaMatricula) {
+
+            Write-Host "🔎 Procurando em NOVAS ADMISSÕES..."
+
+            $pastaMatricula = Get-ChildItem -Path "S:\RH\NOVAS ADMISSÕES" -Directory |
+                Where-Object { $_.Name -match "^$matricula\b" } |
+                Select-Object -First 1
+        }
+    }
+
+    # ===== 2️⃣ BUSCA POR NOME VIA PDF =====
+    if (-not $pastaMatricula) {
+
+        Write-Host "📄 Lendo PDF para buscar nome..."
+
+        $txtTemp = "$env:TEMP\temp_pdf.txt"
+
+        & $caminhoPdfToText $caminhoArquivo $txtTemp
+
+        if (Test-Path $txtTemp) {
+
+            $conteudo = Get-Content $txtTemp -Raw -ErrorAction SilentlyContinue
+
+            if (-not [string]::IsNullOrWhiteSpace($conteudo)) {
+
+                # ===== EXTRAÇÃO DE NOME =====
+                $linhas = $conteudo -split "`n"
+                $nome = $null
+
+                foreach ($linha in $linhas) {
+
+                    $linhaLimpa = $linha.Trim()
+
+                    if ($linhaLimpa -match "^[A-ZÁÉÍÓÚÃÕÇ ]{10,}$" -and
+                        $linhaLimpa -notmatch "CNPJ|CPF|PIS|DATA|HORAS|TOTAL|SERVSUL|RECURSOS") {
+
+                        $nome = $linhaLimpa
+                        break
+                    }
+                }
+
+                if ($nome) {
+
+                    Write-Host "🔎 Nome identificado:" $nome
+
+                    # ===== BUSCA POR NOME =====
+                    $pastaMatricula = Get-ChildItem -Path $destinoBase -Directory |
+                        Where-Object { $_.Name -match [regex]::Escape($nome) } |
+                        Select-Object -First 1
+
+                    if (-not $pastaMatricula) {
+
+                        Write-Host "🔎 Buscando nome em NOVAS ADMISSÕES..."
+
+                        $pastaMatricula = Get-ChildItem -Path "S:\RH\NOVAS ADMISSÕES" -Directory |
+                            Where-Object { $_.Name -match [regex]::Escape($nome) } |
+                            Select-Object -First 1
+                    }
+                }
+                else {
+                    Write-Host "❌ Nome não encontrado no PDF"
+                }
+            }
+            else {
+                Write-Host "❌ Conteúdo do PDF vazio ou não lido"
+            }
+
+            Remove-Item $txtTemp -ErrorAction SilentlyContinue
+        }
+        else {
+            Write-Host "❌ Arquivo TXT não foi gerado pelo pdftotext"
+        }
+    }
+
+    # ===== 3️⃣ PROCESSO FINAL =====
+    if ($pastaMatricula) {
+
+        Write-Host "📁 Pasta encontrada:" $pastaMatricula.FullName
+
+        $pastaBase = Get-ChildItem -Path $pastaMatricula.FullName -Directory |
+            Where-Object {
+                $_.Name -match "(?i)cart[aã]o[\s_-]?ponto" -or
+                $_.Name -match "(?i)^ponto(s)?$" -or
+                $_.Name -match "(?i)ponto eletr[oô]nico"
+            } |
+            Select-Object -First 1
+
+        if (-not $pastaBase) {
+
+            Write-Host "⚠ Criando pasta base CARTAO_PONTO..."
+            $pastaBase = New-Item -ItemType Directory -Path (Join-Path $pastaMatricula.FullName "CARTAO_PONTO") -Force
+        }
+
+        Write-Host "📂 Pasta base:" $pastaBase.FullName
+
+        # ===== USA ANO DO ARQUIVO =====
+        $pastaAno = Join-Path $pastaBase.FullName $anoArquivo
+
+        if (-not (Test-Path $pastaAno)) {
+            Write-Host "⚠ Criando pasta $anoArquivo..."
+            New-Item -ItemType Directory -Path $pastaAno -Force | Out-Null
+        }
+
+        $destinoFinal = Join-Path $pastaAno $arquivo
+
+        if (Test-Path $destinoFinal) {
+            $novoNome = "{0}_{1}{2}" -f $_.BaseName, (Get-Date -Format "HHmmss"), $_.Extension
+            $destinoFinal = Join-Path $pastaAno $novoNome
+            Write-Host "⚠ Arquivo já existe, renomeado para:" $novoNome
+        }
+
+        try {
+            Move-Item $caminhoArquivo $destinoFinal -ErrorAction Stop
+            Write-Host "✅ MOVIDO COM SUCESSO!"
+        }
+        catch {
+            Write-Host "❌ Erro ao mover:" $_
+        }
+    }
+    else {
+        Write-Host "❌ Não encontrou pasta nem por matrícula nem por nome"
+    }
+}
